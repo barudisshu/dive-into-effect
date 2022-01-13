@@ -1,0 +1,156 @@
+== Concepts
+
+Cats Effect 引入了大量的概念，但同时也非常通用和特别简单，如果你刚接触该领域会像看到外星人一样被吓到。它带来了一系列的描述概念和情景的术语(terminology)，比起其它异步框架(诸如Akka或Vert.x)差异非常显著。
+
+总体来说，Cats Effect应该被认为存活在与其它JVM异步运行相同的维度。譬如：
+
+* Akka
+  - akka 被认为是一个更完整的框架，特别地包含了诸如 #akka-http# 和 #akka-cluster#。 Akka的元素对应于Cats Effect的是 Actor 和 Future (实际上是Scala标准库的一部分)
+
+* Netty
+  - Netty的核心运行时( EventLoopGroup 和 大量的 Handler )关联到最基本的也是最多的内部的NIO封装上，但是Cats Effect不提供，不过 https://fs2.io/[Fs2] 做了NIO的封装。相反，Cats Effect的运行时更加稳健。
+
+* Tokio
+
+* RxJava
+
+
+* Vert.x
+
+上面所有提到的库跟Cats Effect相比有显著的不同以及概念层面上的不匹配。Tokio和Vert.x之间可能更接近，尽管两者更垂直一体化(采取更面向 _框架_ 的方式)，而Cats Effect 规范自身定义为 _库_ 以预先更广阔子系统组合。例如，不管是Akka、Netty还是Vert.x 都不支持 *异步取消(asynchronous cancelation)*，也叫 *线程中断* 或 *中断*，意味着基本功能诸如超时(timeout)、并发错误(concurrent error)导致资源泄露。另一个例子是功能不匹配，fiber-aware 与work-stealing 运行时，出现在Tokio 和 Akka，但Netty 或 Vert.x 却没有。最后一个例子是，*异步追踪(asynchronous tracing)* 仅在Vert.x和Akka中以低配版形式出现，其它所有框架、亦或者它们中实现该功能的版本，都没能在实际产品级的使用上带来性能的提升。
+
+尽管有诸多的不同，Cats Effect从根本上解决了其它框架在该领域面临的问题：it is a foundational runtime layer which makes it easy to build and scale complex high-performance asynchronous and parallel software on the JVM and on JavaScript。
+
+=== Fibers
+
+Fiber在Cats Effect中是最基本的抽象。该术语有意地联想起 *线程*，而 *纤程* 字面上理解为更加轻量的线程(lightweight threads, 通常被引用为 “绿色线程” 或 “协程”)。和线程一样，它表示一系列操作最终由底层硬件排序求值(evaluated)。区别于线程在于纤程有footprint和抽象层级。
+
+纤程非常轻量。Cats Effect `IO` 运行时实现的纤程中每个纤程大约 150 个字节，意味着同一进程字面上可以创建数以百万的fiber，并且主要限制因素仅仅只有内存。举个例子，任何使用了Cats Effect的client/server应用将会为每个inbound请求创建一个新的fiber，就像Java的服务端使用 `ServerSocket`则会为每个请求创建一个新的 `Thread` 一样。fiber的创建和启动极其快(work-stealing 算法)，并且它可以有存活期。
+
+纤程的特性将足够它成为一个非常有用的工具，不过Cats Effect将该概念以first-class的形式定义以支持异步回调(asynchronous callbacks)、资源管理(resource handling)、取消/中断等操作中。异步支持有更深远的影响，因为它意味着fiber中任何独立的“步骤”有可能是个 同步操作，直到产出结果或错误；也有可能是个 异步操作，回调或监听等。它们都是fiber的基本构成。这意味着，我们可以简单定义这些同步、异步逻辑，并将它织入到fiber控制流里面。
+
+==== Put another way: with fibers, there is no difference between a callback and a `return` .
+
+. 线程中的每一步是一个语句(statement)，这些语句通过一定的顺序写入文件的形式逐个定义，使用分号(;)组合在一起。
+. 纤程中的每一步是一个effect，这些effect被显式定义组合在 `flatMap` 函数中。
+
+```scala
+import cats.effect._
+
+IO.println("Hello").flatMap { _ =>
+  IO.println("World")
+}
+```
+
+同样地，可以用for-comprehension表述，
+
+```scala
+for {
+  _ <- IO.println("Hello")
+  _ <- IO.println("World")
+} yield ()
+```
+
+Cats effect定义了针对fiber的一些高阶语法，更推崇使用它自己的操作符：`>>`：
+
+```scala
+IO.println("Hello") >> IO.println("World")
+```
+
+同步操作时使用 `*>`，相当于 and then 。
+
+
+所有这些都是fiber。或者fiber定义的一部分，和线程的语句一样。实际上，`IO.println`自身也定义了`flatMap`等属于，意味着它也是fiber的一部分。fiber的每一个“步骤”都是一个effect，这些“步骤”再组合产生一个大的effect。
+
+Cats Effect中每个应用都有一个 "main fiber"，相当于一个 "main thread"。对应地，Cats Effect的 main fiber被定义为 `IOApp`，并包含它的主方法 `run` 。
+
+```scala
+object Hi extends IOApp.Simple {
+  val run = IO.println("Hello") >> IO.println("World")
+}
+```
+
+
+当一个fiber启动了另外一个fiber，通常说第一个fiber是第二个fiber的parent。这种关系并没有继承关系，因为parent可能会在child没有任何不一致的情况下终止。然而，一个合理的fiber模型应当考虑parent/child的关系。通常情况下，fiber应当重视观察错误并从错误中修复；观察它自身的中断(cancelation)，但不能修复自己的中断。父fiber可能会初始化子fiber的中断，以决定后续是否需要继续执行还是中断等。
+
+==== Cancelation
+
+默认地，fiber的中断可以发生在任何执行点。意味着不需要计算资源是否优雅关闭即可正确终止。
+
+例如，大部分中断出现在两种场景：超时和并发错误。
+
+```scala
+import scala.concurrent.duration._
+
+lazy val loop: IO[Unit] = IO.println("Hello, World!") >> loop
+
+loop.timeout(5.seconds) // => IO[Unit]
+```
+
+
+`loop` fiber将一直执行，`timeout`函数delay 5秒后，将执行fiber的`cancel`，中断执行并释放当前持有的资源。
+
+它和Java标准库的`Thread#interrupt`方法非常相似。尽管相似，有两点不同使得cancelation更稳健、更可靠、更安全。
+
+. cooperative。当一个fiber调用另一个fiber的`cancel`，如果目标fiber由于某些原因不能`cancel`， 当前的需要canceling的fiber将同步等待直到cancelation可以被执行。一旦cancelation启动，目标fiber将执行它的所有finalizer(回收，fiber中通常用作资源释放)。相反，`interrupt` 总是立即执行，即使目标 `Thread` 实际上没有interrupt。
+
+. suppressed。使用 `IO.uncancelable` 方法来限制cancelation的行为。
+
+Cats Effect 中 canceling 属于 Fiber的一种。
+
+=== Terminology
+
+Cats Effect 包含三个基本术语。
+
+. asynchronous
+. concurrent
+. parallel
+
+==== Asynchronous
+
+==== Concurrent
+
+cats effect的并发指的是两个或多个任务被定义执行在同一个flow中，对应于 "sequential"
+
+
+```scala
+(callServiceA(params1), callServiceB(params2)).parTupled
+```
+
+==== Parallel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -30,8 +30,9 @@ lazy val `dive-into-effect` = (project in file(".")).settings(
     "org.apache.logging.log4j" % "log4j-core"       % log4j2V,
     "org.apache.logging.log4j" % "log4j-slf4j-impl" % log4j2V,
     // test
-    "org.typelevel"     %% "cats-effect-testkit" % catsEffectV % Test,
-    "org.scalatest"     %% "scalatest"           % scalatestV  % Test,
-    "org.scalatestplus" %% "scalacheck-1-15"     % scalacheckV % Test
+    "org.typelevel"       %% "cats-effect-testkit" % catsEffectV % Test,
+    "org.scalatest"       %% "scalatest"           % scalatestV  % Test,
+    "org.scalatestplus"   %% "scalacheck-1-15"     % scalacheckV % Test,
+    "com.disneystreaming" %% "weaver-cats"         % "0.7.9" % Test
   )
 )
