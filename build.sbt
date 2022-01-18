@@ -20,6 +20,8 @@ lazy val `dive-into-effect` = (project in file(".")).settings(
     )
   ),
   libraryDependencies ++= Seq(
+    // cats effect
+    ("org.typelevel" %% "cats-effect" % catsEffectV).withSources().withJavadoc(),
     // fs2
     "co.fs2" %% "fs2-core"             % fs2V,
     "co.fs2" %% "fs2-io"               % fs2V,
@@ -33,6 +35,7 @@ lazy val `dive-into-effect` = (project in file(".")).settings(
     "org.typelevel"       %% "cats-effect-testkit" % catsEffectV % Test,
     "org.scalatest"       %% "scalatest"           % scalatestV  % Test,
     "org.scalatestplus"   %% "scalacheck-1-15"     % scalacheckV % Test,
-    "com.disneystreaming" %% "weaver-cats"         % "0.7.9" % Test
-  )
+    "com.disneystreaming" %% "weaver-cats"         % "0.7.9"     % Test
+  ),
+  testFrameworks += new TestFramework("weaver.framework.CatsEffect")
 )
